@@ -33,6 +33,13 @@ C_FIRE_C    = (160,  20,  10)
 C_CIVILIAN  = ( 80, 160, 220)
 C_EMPTY     = ( 25,  35,  42)
 C_PROTECTED = ( 70, 130, 180)
+# Colores por tipo de civil
+CIV_COLORS = {
+    "CHILD":   (255, 210,  60),   # amarillo
+    "ADULT":   ( 80, 160, 220),   # azul
+    "ANCIANO": (190, 140, 220),   # violeta
+}
+CIV_LABELS = {"CHILD": "N", "ADULT": "A", "ANCIANO": "E"}
 C_BTN_G     = ( 40, 130,  80)
 C_BTN_B     = ( 40,  90, 160)
 C_BTN_R     = ( 90,  50,  50)
@@ -133,6 +140,8 @@ class GameState:
         self.crew_interval  = 2
         self.truck_interval = 4
         self.heli_interval  = 6
+        self.end_reason = ""
+        self.protected_turns = {}  # (r,c) -> turns remaining
 
     def init(self, difficulty):
         self.difficulty = difficulty
@@ -145,31 +154,59 @@ class GameState:
         self.game_over  = False
         self.victory    = False
         self.next_civ_id = 100
+        self.end_reason = ""
+        self.protected_turns = {}  # (r,c) -> turns remaining
+        self._family_bonus_given = False
 
         iv = {"EASY":(2,4,6), "MEDIUM":(3,5,7), "HARD":(4,6,8)}[difficulty]
         self.crew_interval, self.truck_interval, self.heli_interval = iv
 
-        # Fuegos iniciales
-        self._set_fire(2, 2, "FIRE_NORMAL", 50.0)
-        self._set_fire(5, 5, "FIRE_NORMAL", 40.0)
-        if difficulty in ("MEDIUM","HARD"):
-            self._set_fire(3, 4, "FIRE_CANOPY", 60.0)
-        if difficulty == "HARD":
-            self._set_fire(1, 6, "FIRE_CANOPY", 55.0)
-            self._set_fire(6, 1, "FIRE_CANOPY", 45.0)
+        # ── Configuración por dificultad ──────────────────────────────────────
+        n_normal  = {"EASY": 2, "MEDIUM": 2, "HARD": 2}[difficulty]
+        n_canopy  = {"EASY": 0, "MEDIUM": 1, "HARD": 3}[difficulty]
+        civ_types = {"EASY":   ["ADULT", "CHILD"],
+                     "MEDIUM": ["ADULT", "CHILD", "ANCIANO"],
+                     "HARD":   ["ADULT", "CHILD", "ANCIANO"]}[difficulty]
 
-        # Civiles
-        self._add_civ("ADULT",   0, 7)
-        self._add_civ("CHILD",   7, 0)
-        if difficulty in ("MEDIUM","HARD"):
-            self._add_civ("ANCIANO", 0, 0)
-        if difficulty == "HARD":
-            self._add_civ("FAMILY",  7, 7)
+        def manhattan(r1, c1, r2, c2):
+            return abs(r1 - r2) + abs(c1 - c2)
 
-        # Unidades iniciales
-        self.units = [("GRUPO",1), ("CAMION",1)]
-        if difficulty != "HARD":
-            self.units.append(("HELICOPTERO",1))
+        # Fuegos en celdas interiores (evitar bordes para que no bloqueen civiles)
+        interior = [(r, c) for r in range(1, 7) for c in range(1, 7)]
+        random.shuffle(interior)
+
+        placed_fires = []
+        for ftype, count in [("FIRE_NORMAL", n_normal), ("FIRE_CANOPY", n_canopy)]:
+            placed = 0
+            for (r, c) in interior:
+                if placed == count: break
+                if self.grid[r][c] != "FOREST": continue
+                # Mantener distancia mínima 3 entre fuegos
+                if all(manhattan(r, c, fr, fc) >= 3 for fr, fc in placed_fires):
+                    intensity = random.uniform(40.0, 65.0)
+                    self._set_fire(r, c, ftype, intensity)
+                    placed_fires.append((r, c))
+                    placed += 1
+
+        # Civiles en celdas de borde, lejos de fuegos (distancia mínima 3)
+        border = ([(0, c) for c in range(8)] + [(7, c) for c in range(8)] +
+                  [(r, 0) for r in range(1, 7)] + [(r, 7) for r in range(1, 7)])
+        random.shuffle(border)
+        random.shuffle(civ_types)
+
+        placed_civs = []
+        for ctype in civ_types:
+            for (r, c) in border:
+                if self.grid[r][c] != "FOREST": continue
+                # Lejos de fuegos y de otros civiles
+                if (all(manhattan(r, c, fr, fc) >= 3 for fr, fc in placed_fires) and
+                        all(manhattan(r, c, cr, cc) >= 2 for cr, cc in placed_civs)):
+                    self._add_civ(ctype, r, c)
+                    placed_civs.append((r, c))
+                    break
+
+        # Turno 1: solo GRUPO disponible
+        self.units = [("GRUPO", 1)]
 
     def _set_fire(self, r, c, ftype, intensity):
         self.grid[r][c] = ftype
@@ -184,8 +221,23 @@ class GameState:
     def in_bounds(self, r, c):
         return 0 <= r < 8 and 0 <= c < 8
 
-    # ── Propagar fuego ────────────────────────────────────────────────────────
+    # ── Propagar fuego (cada 2 turnos, segun el reporte) ─────────────────────
     def propagate_fire(self):
+        # Decrementar protecciones del helicoptero y eliminar las expiradas
+        to_expire = [pos for pos, t in self.protected_turns.items() if t <= 1]
+        for pos in to_expire:
+            del self.protected_turns[pos]
+            r2, c2 = pos
+            if self.grid[r2][c2] == "PROTECTED":
+                self.grid[r2][c2] = "FOREST"
+        for pos in list(self.protected_turns):
+            if pos in self.protected_turns:
+                self.protected_turns[pos] -= 1
+
+        # Fuego se propaga solo en turnos pares (cada 2 turnos)
+        if self.turn % 2 != 0:
+            return
+
         snapshot = [row[:] for row in self.grid]
         snap_int = [row[:] for row in self.intensity]
         for r in range(8):
@@ -197,7 +249,7 @@ class GameState:
                     nr, nc = r+dr, c+dc
                     if not self.in_bounds(nr, nc): continue
                     nb = self.grid[nr][nc]
-                    if nb == "PROTECTED": continue
+                    if nb == "PROTECTED" or (nr, nc) in self.protected_turns: continue
                     new_int = snap_int[r][c] * 0.8
                     if nb == "FOREST":
                         self.grid[nr][nc] = ft
@@ -209,18 +261,16 @@ class GameState:
                                 self.score -= 100
                         self.grid[nr][nc] = ft
                         self.intensity[nr][nc] = new_int
-        # Quitar protecciones
-        for r in range(8):
-            for c in range(8):
-                if self.grid[r][c] == "PROTECTED":
-                    self.grid[r][c] = "FOREST"
 
     # ── Llegar unidades ───────────────────────────────────────────────────────
     def arrive_units(self):
-        if self.turn % self.crew_interval  == 0: self.units.append(("GRUPO",      self.turn))
-        if self.turn % self.truck_interval == 0: self.units.append(("CAMION",     self.turn))
-        if self.difficulty != "HARD" and self.turn % self.heli_interval == 0:
-            self.units.append(("HELICOPTERO", self.turn))
+        t = self.turn
+        if t == 2:
+            # Turno 2: se entrega solo CAMION (se limpia lo que sobró del turno anterior)
+            self.units = [("CAMION", t)]
+        elif t >= 3:
+            # Turno 3 en adelante: 1 de cada tipo, sin límite de usos por turno
+            self.units = [("GRUPO", t), ("CAMION", t), ("HELICOPTERO", t)]
 
     # ── Greedy deploy ─────────────────────────────────────────────────────────
     def greedy_deploy(self):
@@ -240,16 +290,28 @@ class GameState:
         is_canopy = self.grid[r][c] == "FIRE_CANOPY"
         pts = int((15 if is_canopy else 10) * target["risk"])
         self.score += pts
+
+        # Apagar la celda objetivo (todas las unidades apagan 1 celda — reporte)
         self.grid[r][c] = "EMPTY"
         self.intensity[r][c] = 0.0
 
-        if unit_type == "HELICOPTERO":
+        if unit_type in ("GRUPO", "CAMION"):
+            # Reducir riesgo de vecinos a la mitad
+            for dr, dc in self.DIRS4:
+                nr, nc = r+dr, c+dc
+                if self.in_bounds(nr, nc) and self.grid[nr][nc] in ("FIRE_NORMAL","FIRE_CANOPY"):
+                    self.intensity[nr][nc] *= 0.5
+            effect = "vecinos reducidos al 50%"
+        else:  # HELICOPTERO
+            # Proteger vecinos por 2 turnos (no se incendian)
             for dr, dc in self.DIRS8:
                 nr, nc = r+dr, c+dc
-                if self.in_bounds(nr,nc) and self.grid[nr][nc] == "FOREST":
+                if self.in_bounds(nr, nc) and self.grid[nr][nc] == "FOREST":
                     self.grid[nr][nc] = "PROTECTED"
+                    self.protected_turns[(nr, nc)] = 2
+            effect = "vecinos protegidos 2 turnos"
 
-        return f"[Greedy] {unit_type} → ({r},{c}) riesgo={target['risk']:.0f} +{pts}pts"
+        return f"[{unit_type}] ({r},{c}) apagado — {effect} +{pts}pts"
 
     # ── Backtracking evacuate ─────────────────────────────────────────────────
     def backtrack_evacuate(self, civ_id):
@@ -293,15 +355,25 @@ class GameState:
         # Mover civil a posición final
         self.grid[sr][sc] = "EMPTY"
         civ["status"] = "EVACUATED"
-        pts = {"CHILD":100,"ADULT":50,"ANCIANO":75,"FAMILY":150}.get(civ["type"],50)
+        pts = {"CHILD": 100, "ADULT": 50, "ANCIANO": 75}.get(civ["type"], 50)
         self.score += pts
-        return f"[Backtracking] Civil {civ_id} evacuado en {len(best)} pasos +{pts}pts"
+        msg = f"[Backtracking] Civil {civ_id} ({civ['type']}) evacuado en {len(best)} pasos +{pts}pts"
+
+        # Bonus de familia: si se evacuaron los 3 tipos juntos
+        evacuated_types = {c["type"] for c in self.civilians if c["status"] == "EVACUATED"}
+        if {"CHILD", "ADULT", "ANCIANO"}.issubset(evacuated_types):
+            # Solo otorgar el bonus una vez (verificar que no se haya dado antes)
+            if not getattr(self, "_family_bonus_given", False):
+                self.score += 150
+                self._family_bonus_given = True
+                msg += " | BONUS FAMILIA +150pts!"
+        return msg
 
     # ── Avanzar turno ─────────────────────────────────────────────────────────
     def next_turn(self):
         self.propagate_fire()
-        self.arrive_units()
         self.turn += 1
+        self.arrive_units()
         self._check_win_loss()
 
     def _check_win_loss(self):
@@ -312,13 +384,21 @@ class GameState:
                     if self.grid[r][c] in ("FIRE_NORMAL","FIRE_CANOPY"))
 
         if total > 0 and dead > total // 2:
-            self.game_over = True; return
+            self.game_over  = True
+            self.end_reason = (f"Murieron {dead} de {total} civiles.\n"
+                               f"El fuego alcanzo a mas de la mitad de la poblacion.")
+            return
         if fires > 51:
-            self.game_over = True; return
-        if fires == 0 and alive == 0 and dead == 0:
-            self.game_over = True
-            self.victory   = True
-            self.score    += 500
+            self.game_over  = True
+            self.end_reason = (f"El incendio se descontroló ({fires} celdas en llamas).\n"
+                               f"Demasiado territorio fue consumido por el fuego.")
+            return
+        if fires == 0 and alive == 0:
+            self.game_over  = True
+            self.victory    = True
+            self.score     += 500
+            self.end_reason = ("Todos los incendios fueron apagados\n"
+                               "y no quedan civiles en peligro.")
 
     def _get_fires(self):
         result = []
@@ -433,7 +513,7 @@ class FireBrigadeUI:
         has_units = len(gs.units) > 0
         has_fires = gs.fire_count() > 0
         has_civs  = len(gs.alive_civilians()) > 0
-        self.btn_deploy.disabled   = not (has_units and has_fires) or self.action_taken
+        self.btn_deploy.disabled   = not (has_units and has_fires)
         self.btn_evacuate.disabled = not has_civs or self.action_taken
         for b in (self.btn_deploy,self.btn_evacuate,self.btn_end): b.update(mp)
 
@@ -502,30 +582,56 @@ class FireBrigadeUI:
 
     def draw_grid(self):
         gs = self.gs
+        # Mapa rápido: posición -> civil vivo
+        civ_at = {}
+        for civ in gs.civilians:
+            if civ["status"] == "ALIVE":
+                civ_at[(civ["row"], civ["col"])] = civ
+
         for r in range(8):
             for c in range(8):
                 x = GRID_OFFSET_X + c*CELL_SIZE
                 y = GRID_OFFSET_Y + r*CELL_SIZE
                 rect = pygame.Rect(x, y, CELL_SIZE-1, CELL_SIZE-1)
                 ct   = gs.grid[r][c]
-                col  = cell_color(ct)
-                if ct=="FOREST" and (r+c)%2==0: col=C_FOREST2
+
+                # Color base de celda
+                if ct == "CIVILIAN":
+                    civ = civ_at.get((r, c))
+                    col = CIV_COLORS.get(civ["type"], C_CIVILIAN) if civ else C_CIVILIAN
+                else:
+                    col = cell_color(ct)
+                    if ct == "FOREST" and (r+c) % 2 == 0:
+                        col = C_FOREST2
+
                 rr(self.screen, col, rect, r=4)
 
-                # Borde si está seleccionado
+                # Borde de selección
                 for civ in gs.civilians:
                     if civ["row"]==r and civ["col"]==c and civ["id"]==self.sel_civ:
                         pygame.draw.rect(self.screen, C_ACCENT, rect, 3, border_radius=4)
 
                 # Etiqueta de celda
-                label={"FIRE_NORMAL":"N","FIRE_CANOPY":"C","CIVILIAN":"P","PROTECTED":"~"}.get(ct,"")
-                if label:
-                    s=F_CELL.render(label,True,C_TEXT)
-                    self.screen.blit(s,(x+CELL_SIZE//2-s.get_width()//2,
+                if ct == "CIVILIAN":
+                    civ = civ_at.get((r, c))
+                    label = CIV_LABELS.get(civ["type"], "P") if civ else "P"
+                    # Fondo oscuro pequeño para legibilidad
+                    sb = pygame.Surface((CELL_SIZE-10, 22), pygame.SRCALPHA)
+                    sb.fill((0, 0, 0, 90))
+                    self.screen.blit(sb, (x+5, y+CELL_SIZE//2-11))
+                    s = F_CELL.render(label, True, (255, 255, 255))
+                    self.screen.blit(s, (x+CELL_SIZE//2-s.get_width()//2,
                                         y+CELL_SIZE//2-s.get_height()//2))
+                else:
+                    label = {"FIRE_NORMAL": "N", "FIRE_CANOPY": "C", "PROTECTED": "~"}.get(ct, "")
+                    if label:
+                        s = F_CELL.render(label, True, C_TEXT)
+                        self.screen.blit(s, (x+CELL_SIZE//2-s.get_width()//2,
+                                            y+CELL_SIZE//2-s.get_height()//2))
+
                 # Coordenadas
-                s=F_COORD.render(f"{r},{c}",True,(40,60,70))
-                self.screen.blit(s,(x+3,y+3))
+                s = F_COORD.render(f"{r},{c}", True, (40, 60, 70))
+                self.screen.blit(s, (x+3, y+3))
 
         # Borde del grid
         pygame.draw.rect(self.screen, C_BORDER,
@@ -576,12 +682,19 @@ class FireBrigadeUI:
         pygame.draw.line(self.screen,C_BORDER,(sx,y),(sx+sw-10,y)); y+=8
         txt(self.screen,"LEYENDA",F_SMALL,C_DIM,sx,y); y+=14
         for col,lab in [(C_FOREST,"Bosque"),(C_FIRE_N,"Fuego Normal (N)"),
-                        (C_FIRE_C,"Fuego Copas (C)"),(C_CIVILIAN,"Civil (P)"),
-                        (C_PROTECTED,"Protegido (~)")]:
+                        (C_FIRE_C,"Fuego Copas (C)"),(C_PROTECTED,"Protegido (~)")]:
             pygame.draw.rect(self.screen,col,(sx,y,11,11),border_radius=2)
             txt(self.screen,lab,F_SMALL,C_DIM,sx+16,y); y+=14
+        y+=2
+        txt(self.screen,"Civiles:",F_SMALL,C_DIM,sx,y); y+=13
+        for ctype,label in [("CHILD","N - Niño (+100)"),("ADULT","A - Adulto (+50)"),
+                             ("ANCIANO","E - Anciano (+75)")]:
+            col = CIV_COLORS[ctype]
+            pygame.draw.rect(self.screen,col,(sx,y,11,11),border_radius=2)
+            txt(self.screen,label,F_SMALL,C_DIM,sx+16,y); y+=13
+        txt(self.screen,"N+A+E = Bonus Familia +150!",F_SMALL,(80,210,140),sx,y); y+=13
         y+=4
-        txt(self.screen,"Click celda P = seleccionar civil",F_SMALL,C_DIM,sx,y)
+        txt(self.screen,"Click celda = seleccionar civil",F_SMALL,C_DIM,sx,y)
 
     # ── GAME OVER ─────────────────────────────────────────────────────────────
     def update_over(self, evs, mp):
@@ -593,16 +706,27 @@ class FireBrigadeUI:
         self.screen.fill(C_BG)
         ov=pygame.Surface((SCREEN_W,SCREEN_H),pygame.SRCALPHA)
         ov.fill((0,0,0,170)); self.screen.blit(ov,(0,0))
-        gs=self.gs
+        gs  = self.gs
         col = C_GREEN if gs.victory else C_FIRE_N
         res = "VICTORIA" if gs.victory else "DERROTA"
-        s1=F_BIG.render(res,True,col)
-        s2=F_MAIN.render(f"Puntuacion final: {gs.score}",True,C_TEXT)
-        s3=F_SMALL.render("Presiona R para volver al menu",True,C_DIM)
-        cx=SCREEN_W//2
-        self.screen.blit(s1,(cx-s1.get_width()//2,260))
-        self.screen.blit(s2,(cx-s2.get_width()//2,320))
-        self.screen.blit(s3,(cx-s3.get_width()//2,380))
+        cx  = SCREEN_W//2
+
+        s1 = F_BIG.render(res, True, col)
+        self.screen.blit(s1, (cx-s1.get_width()//2, 200))
+
+        s2 = F_MAIN.render(f"Puntuacion final: {gs.score}", True, C_TEXT)
+        self.screen.blit(s2, (cx-s2.get_width()//2, 255))
+
+        # Motivo línea por línea
+        if gs.end_reason:
+            y_r = 300
+            for line in gs.end_reason.split("\n"):
+                sr = F_SMALL.render(line, True, col)
+                self.screen.blit(sr, (cx-sr.get_width()//2, y_r))
+                y_r += 22
+
+        s3 = F_SMALL.render("Presiona R para volver al menu", True, C_DIM)
+        self.screen.blit(s3, (cx-s3.get_width()//2, 390))
 
     def set_msg(self, m): self.msg=m; self.msg_t=200
 
