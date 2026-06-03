@@ -1,0 +1,14 @@
+{
+    "action": "EVACUATE",
+    "parameters": {
+        "civilian_id": 100,
+        "route": [
+            [
+                0,
+                7
+            ]
+        ]
+    },
+    "turn": 1,
+    "difficulty": "EASY"
+}

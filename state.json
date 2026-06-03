@@ -1,0 +1,159 @@
+{
+    "grid_size": [
+        8,
+        8
+    ],
+    "turn": 1,
+    "difficulty": "EASY",
+    "grid": [
+        [
+            "FOREST",
+            "FOREST",
+            "FOREST",
+            "FOREST",
+            "FOREST",
+            "FOREST",
+            "FOREST",
+            "CIVILIAN"
+        ],
+        [
+            "FOREST",
+            "FOREST",
+            "FOREST",
+            "FOREST",
+            "FOREST",
+            "FOREST",
+            "FOREST",
+            "FOREST"
+        ],
+        [
+            "FOREST",
+            "FOREST",
+            "FIRE_NORMAL",
+            "FOREST",
+            "FOREST",
+            "FOREST",
+            "FOREST",
+            "FOREST"
+        ],
+        [
+            "FOREST",
+            "FOREST",
+            "FOREST",
+            "FOREST",
+            "FOREST",
+            "FOREST",
+            "FOREST",
+            "FOREST"
+        ],
+        [
+            "FOREST",
+            "FOREST",
+            "FOREST",
+            "FOREST",
+            "FOREST",
+            "FOREST",
+            "FOREST",
+            "FOREST"
+        ],
+        [
+            "FOREST",
+            "FOREST",
+            "FOREST",
+            "FOREST",
+            "FOREST",
+            "FIRE_NORMAL",
+            "FOREST",
+            "FOREST"
+        ],
+        [
+            "FOREST",
+            "FOREST",
+            "FOREST",
+            "FOREST",
+            "FOREST",
+            "FOREST",
+            "FOREST",
+            "FOREST"
+        ],
+        [
+            "CIVILIAN",
+            "FOREST",
+            "FOREST",
+            "FOREST",
+            "FOREST",
+            "FOREST",
+            "FOREST",
+            "FOREST"
+        ]
+    ],
+    "fires": [
+        {
+            "position": [
+                2,
+                2
+            ],
+            "type": "NORMAL",
+            "intensity": 50.0,
+            "risk": 50.0
+        },
+        {
+            "position": [
+                5,
+                5
+            ],
+            "type": "NORMAL",
+            "intensity": 50.0,
+            "risk": 50.0
+        }
+    ],
+    "units": [
+        {
+            "id": 1,
+            "type": "GRUPO",
+            "arrival_turn": 1,
+            "status": "READY"
+        },
+        {
+            "id": 2,
+            "type": "CAMION",
+            "arrival_turn": 1,
+            "status": "READY"
+        },
+        {
+            "id": 3,
+            "type": "HELICOPTERO",
+            "arrival_turn": 1,
+            "status": "READY"
+        }
+    ],
+    "civilians": [
+        {
+            "id": 100,
+            "type": "ADULT",
+            "position": [
+                0,
+                7
+            ],
+            "status": "ALIVE"
+        },
+        {
+            "id": 101,
+            "type": "CHILD",
+            "position": [
+                7,
+                0
+            ],
+            "status": "ALIVE"
+        }
+    ],
+    "game_stats": {
+        "score": 0,
+        "turn": 1,
+        "civilians_alive": 2,
+        "civilians_dead": 0,
+        "civilians_evacuated": 0,
+        "game_over": false,
+        "victory": false
+    }
+}
