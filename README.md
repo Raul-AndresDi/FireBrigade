@@ -1,128 +1,161 @@
-# README - Ejecución del proyecto FireBrigade en VS Code
+# 🔥 Fire Brigade
 
-Este documento explica cómo abrir, ejecutar y revisar el proyecto en **Visual Studio Code**, además de cómo instalar **g++** en Windows si no está disponible. La extensión de C/C++ en VS Code requiere un compilador externo para compilar archivos `.cpp`, y una opción recomendada en Windows es instalar el toolchain de **MSYS2/MinGW-w64** y agregar su carpeta `bin` al `PATH` del sistema [1][2].
+A turn-based tactical simulation game where the player commands firefighting and civilian evacuation operations on an 8×8 grid. Developed as an academic project for the **Algorithms and Data Structures** course at Universidad Distrital Francisco José de Caldas.
 
-## Requisitos
+## Authors
 
-Antes de ejecutar el proyecto, conviene tener instalado lo siguiente:
+| Name | Role |
+|---|---|
+| Raul Andres Diaz Lozada | UI Developer — Pygame interface |
+| Andres Mauricio Cepeda Villanueva | Algorithm Developer — Greedy & Backtracking |
+| Jeison Felipe Cuervo Huertas | Engine Developer — C++ core & JSON bridge |
 
-- **Visual Studio Code**.
-- Extensión **C/C++** de Microsoft para trabajar con los archivos `.cpp` en VS Code [2].
-- **Python 3** para ejecutar los módulos `.py` del proyecto.
-- **g++** para compilar el código C++ en Windows [1][2].
+**Supervisor:** Carlos A. Sierra Virgüez
 
-## Abrir el proyecto en VS Code
+---
 
-1. Abrir **VS Code**.
-2. Ir a **File > Open Folder**.
-3. Seleccionar la carpeta del proyecto.
-4. Verificar que aparecen archivos como `main.cpp`, `BST.cpp`, `GameEngine.cpp`, `game_ui.py` y los archivos JSON relacionados.
+## Abstract
 
-También es posible abrir la carpeta desde Git Bash con el comando `code .` si VS Code ya está agregado al sistema y la terminal está ubicada dentro del proyecto.
+Fire Brigade models forest fire suppression and civilian evacuation on an 8×8 grid. The game implements two core algorithms:
 
-## Cómo revisar el proyecto
+- **Greedy Algorithm** — automatically dispatches firefighting units to the highest-risk burning cell, using a Binary Search Tree (BST) for O(log n) retrieval.
+- **Backtracking Algorithm** — finds the shortest safe evacuation route for civilians, avoiding all burning cells.
 
-Dentro de VS Code se puede revisar el proyecto desde el panel **Explorer**, donde aparecen todos los archivos y carpetas del repositorio. Para proyectos en C++ y Python, VS Code permite navegar entre archivos, abrir la terminal integrada y ejecutar compilación o scripts desde la misma ventana [3][4].
+The architecture separates the C++ game engine from the Python algorithm layer, communicating through a JSON bridge and rendering the interface with Pygame.
 
-Archivos importantes del proyecto:
+---
 
-- `main.cpp`: punto de entrada del código C++.
-- `BST.cpp` y `BST.h`: estructura del árbol binario de búsqueda.
-- `GameEngine.cpp` y `GameEngine.h`: lógica principal del motor.
-- `LinkedList.cpp` y `LinkedList.h`: implementación de lista enlazada.
-- `game_ui.py`: interfaz en Python/Pygame.
-- `algorithms.py`, `greedy.py`, `backtracking.py`: lógica algorítmica.
-- `input.json`, `state.json`, `tasks.json`: archivos de entrada y estado.
+## Repository Structure
 
-## Ejecutar la parte de Python
-
-Para correr la interfaz o scripts en Python desde VS Code:
-
-1. Abrir el archivo `game_ui.py`.
-2. Abrir la terminal integrada con **Terminal > New Terminal**.
-3. Ejecutar:
-
-```bash
-python game_ui.py
+```
+FireBrigade/
+├── engine/                 # C++ Game Engine
+│   ├── main.cpp
+│   ├── GameEngine.cpp / .h
+│   ├── BST.cpp / .h
+│   ├── LinkedList.cpp / .h
+│   └── json.hpp
+├── game/                   # Python Game Logic
+│   ├── ui/
+│   │   └── main.py         # Pygame interface
+│   ├── algorithms/
+│   │   ├── greedy.py
+│   │   └── backtracking.py
+│   └── bridge.py           # JSON reader/writer
+├── data/
+│   ├── input.json          # Python → C++
+│   ├── state.json          # C++ → Python
+│   └── tasks.json
+├── docs/
+├── README.md
+└── .gitignore
 ```
 
-En VS Code también puede usarse el botón de ejecución del archivo Python cuando la extensión de Python está instalada, lo que permite lanzar el programa directamente desde el editor [4].
+---
 
-## Compilar y ejecutar la parte en C++
+## Requirements
 
-Si el proyecto usa varios archivos `.cpp`, una compilación manual básica desde la terminal puede hacerse así:
+### C++ Engine
+- **g++** with C++17 support
+  - Windows: [MinGW-w64](https://www.mingw-w64.org/) or install via `winget install mingw`
+  - Linux: `sudo apt install g++`
 
-```bash
-g++ main.cpp BST.cpp GameEngine.cpp LinkedList.cpp -o FireBrigade
-```
+### Python Layer
+- **Python 3.10+**
+- **Pygame**: `pip install pygame`
 
-Después, el ejecutable puede correrse con:
+---
 
-```bash
-./FireBrigade
-```
+## How to Compile & Run
 
-En VS Code también puede configurarse una tarea de compilación, y para ejecuciones simples es común usar el atajo de build con tareas o extensiones como Code Runner, aunque el método más estable sigue siendo compilar desde la terminal cuando el proyecto tiene varios archivos [3][5].
-
-## Instalar g++ en Windows si no está instalado
-
-Una forma recomendada de instalar **g++** en Windows es usando **MSYS2** con el toolchain **MinGW-w64** [1][2].
-
-### Opción recomendada: MSYS2 + MinGW-w64
-
-1. Instalar **MSYS2** desde su instalador oficial.
-2. Abrir la terminal de MSYS2.
-3. Actualizar paquetes con:
+### 1. Clone the repository
 
 ```bash
-pacman -Syu
+git clone https://github.com/Raul-AndresDi/FireBrigade.git
+cd FireBrigade
 ```
 
-4. Luego instalar el toolchain de compilación:
+### 2. Compile the C++ engine
+
+**Windows (MinGW / Git Bash):**
+```bash
+g++ -std=c++17 -o engine/FireBrigade.exe engine/main.cpp engine/GameEngine.cpp engine/BST.cpp engine/LinkedList.cpp
+```
+
+**Linux:**
+```bash
+g++ -std=c++17 -o engine/FireBrigade engine/main.cpp engine/GameEngine.cpp engine/BST.cpp engine/LinkedList.cpp
+```
+
+### 3. Run the C++ engine
+
+**Windows:**
+```bash
+./engine/FireBrigade.exe
+```
+
+**Linux:**
+```bash
+./engine/FireBrigade
+```
+
+### 4. Run the Pygame interface
 
 ```bash
-pacman -S --needed base-devel mingw-w64-x86_64-toolchain
+python game/ui/main.py
 ```
 
-Algunas guías también recomiendan instalar herramientas adicionales como CMake y Ninja para flujos de compilación más completos [1].
+> The engine must be running before launching the UI, as they communicate through `data/state.json` and `data/input.json`.
 
-### Agregar g++ al PATH
+---
 
-Después de instalar el compilador, hay que agregar la carpeta `bin` del entorno de MinGW al `PATH` para que VS Code y la terminal puedan reconocer `g++` [2]. En una instalación típica de MSYS2, la ruta puede estar dentro de directorios como `C:\msys64\ucrt64\bin` o la variante MinGW correspondiente [2].
+## Gameplay
 
-### Verificar la instalación
+| Element | Description |
+|---|---|
+| 8×8 Grid | Forest cells that can catch fire or hold civilians |
+| 🔴 Normal Fire | Spreads in 4 directions every 2 turns |
+| 🟥 Canopy Fire | Spreads in 8 directions every 2 turns (×1.5 risk) |
+| 🟡 N — Child | +100 pts on evacuation |
+| 🔵 A — Adult | +50 pts on evacuation |
+| 🟣 E — Elderly | +75 pts on evacuation (moves slower) |
+| 🏅 Family Bonus | Evacuate all three civilian types → +150 pts |
 
-Abrir una nueva terminal y ejecutar:
+### Units
 
-```bash
-g++ --version
-```
+| Unit | Effect |
+|---|---|
+| Crew | Extinguishes 1 cell + reduces neighbor risk by 50% |
+| Truck | Extinguishes 1 cell + reduces neighbor risk by 50% |
+| Helicopter | Extinguishes 1 cell + protects neighbors for 2 turns |
 
-Si aparece la versión del compilador, la instalación quedó correcta [1][2].
+### Win / Loss
 
-## Flujo recomendado para un compañero
+- **Win:** All fires extinguished AND all civilians evacuated.
+- **Loss:** More than half the civilians burned, OR fire covers more than 80% of the grid.
 
-1. Clonar o descargar el repositorio.
-2. Abrir la carpeta en VS Code.
-3. Verificar que **Python** funciona con `python --version`.
-4. Verificar que **g++** funciona con `g++ --version` [1][2].
-5. Ejecutar la parte Python con `python game_ui.py`.
-6. Compilar la parte C++ con el comando de `g++` correspondiente.
+---
 
-## Problemas comunes
+## Difficulty Levels
 
-### `g++` no se reconoce
+| Parameter | Easy | Medium | Hard |
+|---|---|---|---|
+| Normal fires | 2 | 2 | 2 |
+| Canopy fires | 0 | 1 | 3 |
+| Civilians | 2 | 3 | 4 |
+| Initial units | Crew, Truck, Heli | Crew, Truck, Heli | Crew, Truck |
 
-Si aparece un mensaje como “`g++` is not recognized”, significa que el compilador no está instalado o no está agregado al `PATH` del sistema [2].
+---
 
-### `python` no se reconoce
+## Data Structures & Algorithms
 
-En ese caso hace falta instalar Python o agregarlo al `PATH`.
+- **Singly Linked List** — manages the unit dispatch queue (FIFO, O(1) enqueue/dequeue).
+- **Binary Search Tree (BST)** — ranks burning cells by risk level for O(log n) max retrieval.
+- **Greedy Dispatcher** — always targets the highest-risk cell; tie-breaking prefers canopy fire, then smallest coordinates.
+- **Backtracking Evacuator** — depth-first search finding the shortest safe path to the grid boundary.
 
-### VS Code abre el proyecto pero no compila
+---
 
-Eso suele pasar cuando la extensión C/C++ está instalada pero no existe un compilador externo configurado. VS Code por sí solo no incluye `g++`; necesita encontrarlo en el sistema [2].
+## License
 
-## Recomendación para el repositorio
-
-Conviene incluir este archivo como `README.md` en GitHub y complementarlo con un `.gitignore`, ya que GitHub recomienda inicializar o mantener repositorios con README para explicar su propósito y uso [6].
+This project was developed for academic purposes at Universidad Distrital Francisco José de Caldas, 2026.
