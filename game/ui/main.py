@@ -7,6 +7,8 @@ import pygame
 import json
 import sys
 import random
+import os
+import time
 
 pygame.init()
 
@@ -188,15 +190,14 @@ class GameState:
                     placed_fires.append((r, c))
                     placed += 1
 
-        # Civiles en celdas de borde, lejos de fuegos (distancia mínima 3)
-        border = ([(0, c) for c in range(8)] + [(7, c) for c in range(8)] +
-                  [(r, 0) for r in range(1, 7)] + [(r, 7) for r in range(1, 7)])
-        random.shuffle(border)
+        # Civiles en celdas interiores, lejos de fuegos (distancia mínima 3)
+        interior_civs = [(r, c) for r in range(1, 7) for c in range(1, 7)]
+        random.shuffle(interior_civs)
         random.shuffle(civ_types)
 
         placed_civs = []
         for ctype in civ_types:
-            for (r, c) in border:
+            for (r, c) in interior_civs:
                 if self.grid[r][c] != "FOREST": continue
                 # Lejos de fuegos y de otros civiles
                 if (all(manhattan(r, c, fr, fc) >= 3 for fr, fc in placed_fires) and
@@ -213,8 +214,12 @@ class GameState:
         self.intensity[r][c] = intensity
 
     def _add_civ(self, ctype, r, c):
+        # add movement fields for multi-turn evacuations
         self.civilians.append({"id": self.next_civ_id, "type": ctype,
-                               "row": r, "col": c, "status": "ALIVE"})
+                               "row": r, "col": c, "status": "ALIVE",
+                               "route": [], "route_index": 0,
+                               "move_cooldown": 0,
+                               "speed": (2 if ctype == "ANCIANO" else 1)})
         self.grid[r][c] = "CIVILIAN"
         self.next_civ_id += 1
 
@@ -352,12 +357,29 @@ class GameState:
         if not best:
             return f"Civil {civ_id}: sin ruta segura"
 
-        # Mover civil a posición final
-        self.grid[sr][sc] = "EMPTY"
-        civ["status"] = "EVACUATED"
-        pts = {"CHILD": 100, "ADULT": 50, "ANCIANO": 75}.get(civ["type"], 50)
-        self.score += pts
-        msg = f"[Backtracking] Civil {civ_id} ({civ['type']}) evacuado en {len(best)} pasos +{pts}pts"
+        # CHILD evacua en un solo turno: evacuación inmediata
+        if civ["type"] == "CHILD":
+            self.grid[sr][sc] = "EMPTY"
+            civ["status"] = "EVACUATED"
+            civ["route"] = []
+            pts = {"CHILD": 100}.get(civ["type"], 100)
+            self.score += pts
+            msg = f"[Backtracking] Child {civ_id} evacuado inmediatamente +{pts}pts"
+        else:
+            # Assign route and initiate multi-turn evacuation
+            civ["route"] = best
+            civ["route_index"] = 0
+            civ["move_cooldown"] = max(0, civ["speed"] - 1)
+            # If route length is 1 (already on border), immediate evac
+            if len(best) <= 1:
+                self.grid[sr][sc] = "EMPTY"
+                civ["status"] = "EVACUATED"
+                pts = {"ADULT": 50, "ANCIANO": 75}.get(civ["type"], 50)
+                self.score += pts
+                msg = f"[Backtracking] Civil {civ_id} ({civ['type']}) evacuado en {len(best)} pasos +{pts}pts"
+            else:
+                civ["status"] = "MOVING"
+                msg = f"[Backtracking] Civil {civ_id} ({civ['type']}) inicia evacuación ({len(best)-1} pasos)"
 
         # Bonus de familia: si se evacuaron los 3 tipos juntos
         evacuated_types = {c["type"] for c in self.civilians if c["status"] == "EVACUATED"}
@@ -369,12 +391,131 @@ class GameState:
                 msg += " | BONUS FAMILIA +150pts!"
         return msg
 
+    def find_route(self, civ_id):
+        # compute shortest safe route to border without mutating state
+        civ = next((c for c in self.civilians if c["id"]==civ_id and c["status"]=="ALIVE"), None)
+        if not civ: return None
+
+        fire_set = set()
+        for r in range(8):
+            for c in range(8):
+                if self.grid[r][c] in ("FIRE_NORMAL","FIRE_CANOPY"):
+                    fire_set.add((r,c))
+
+        sr, sc = civ["row"], civ["col"]
+        best = []
+        visited = [[False]*8 for _ in range(8)]
+
+        def on_border(r,c): return r==0 or r==7 or c==0 or c==7
+
+        def explore(r, c, path):
+            nonlocal best
+            path.append((r,c))
+            if on_border(r,c):
+                if not best or len(path) < len(best):
+                    best = list(path)
+                path.pop(); return
+            if best and len(path) >= len(best):
+                path.pop(); return
+            visited[r][c] = True
+            for dr,dc in self.DIRS4:
+                nr,nc = r+dr, c+dc
+                if self.in_bounds(nr,nc) and not visited[nr][nc] and (nr,nc) not in fire_set:
+                    explore(nr,nc,path)
+            visited[r][c] = False
+            path.pop()
+
+        explore(sr, sc, [])
+        return best if best else None
+
+    def load_from_state_file(self, path="state.json"):
+        if not os.path.exists(path): return False
+        try:
+            with open(path,'r') as f:
+                j = json.load(f)
+        except Exception:
+            return False
+
+        # grid
+        if "grid" in j:
+            self.grid = j["grid"]
+        # civilians
+        self.civilians = []
+        if "civilians" in j:
+            for cv in j["civilians"]:
+                civ = {"id": cv.get("id"), "type": cv.get("type"),
+                       "row": cv.get("position", [0,0])[0], "col": cv.get("position", [0,0])[1],
+                       "status": cv.get("status", "ALIVE"),
+                       "route": [], "route_index": cv.get("route_index", 0),
+                       "move_cooldown": cv.get("move_cooldown", 0),
+                       "speed": cv.get("speed", 1)}
+                if "route" in cv:
+                    civ["route"] = [(p[0],p[1]) for p in cv["route"]]
+                self.civilians.append(civ)
+
+        # units
+        self.units = []
+        if "units" in j:
+            for u in j["units"]:
+                self.units.append((u.get("type"), u.get("arrival_turn")))
+
+        # stats
+        if "game_stats" in j:
+            gs = j["game_stats"]
+            self.score = gs.get("score", self.score)
+            self.turn = gs.get("turn", self.turn)
+            self.game_over = gs.get("game_over", self.game_over)
+            self.victory = gs.get("victory", self.victory)
+
+        return True
+
     # ── Avanzar turno ─────────────────────────────────────────────────────────
     def next_turn(self):
+        # advance evacuations first (multi-turn movement)
+        self.advance_evacuations()
         self.propagate_fire()
         self.turn += 1
         self.arrive_units()
         self._check_win_loss()
+
+    def advance_evacuations(self):
+        for civ in self.civilians:
+            if civ["status"] in ("DEAD", "EVACUATED"): continue
+            if not civ.get("route"): continue
+            if civ["status"] != "MOVING": civ["status"] = "MOVING"
+
+            if civ["move_cooldown"] > 0:
+                civ["move_cooldown"] -= 1
+                continue
+
+            # clear current cell if marked as CIVILIAN
+            r0, c0 = civ["row"], civ["col"]
+            if self.in_bounds(r0, c0) and self.grid[r0][c0] == "CIVILIAN":
+                self.grid[r0][c0] = "EMPTY"
+
+            # advance index
+            civ["route_index"] += 1
+
+            if civ["route_index"] >= len(civ["route"]):
+                # reached safety
+                civ["status"] = "EVACUATED"
+                pts = {"CHILD": 100, "ADULT": 50, "ANCIANO": 75}.get(civ["type"], 50)
+                self.score += pts
+                # ensure we don't leave CIVILIAN marker
+                print_msg = f"[EngineSim] Civil {civ['id']} completó evacuación. +{pts}pts"
+                continue
+
+            # move to next cell
+            nr, nc = civ["route"][civ["route_index"]]
+            # if moving into fire -> dies
+            if self.in_bounds(nr, nc) and self.grid[nr][nc] in ("FIRE_NORMAL", "FIRE_CANOPY"):
+                civ["status"] = "DEAD"
+                self.score -= 100
+                continue
+
+            civ["row"], civ["col"] = nr, nc
+            if self.in_bounds(nr, nc): self.grid[nr][nc] = "CIVILIAN"
+            civ["move_cooldown"] = max(0, civ["speed"] - 1)
 
     def _check_win_loss(self):
         alive = sum(1 for c in self.civilians if c["status"]=="ALIVE")
@@ -434,6 +575,15 @@ class FireBrigadeUI:
         self.msg_t  = 0
         self.sel_civ = None  # id civil seleccionado
         self.action_taken = False  # 1 accion por turno
+        # demo automation
+        self.demo = False
+        self.demo_state = 0
+        self.demo_timer = 0
+        # engine integration
+        self.engine_mode = False
+        self.state_mtime = 0
+        self.poll_interval = 0.5
+        self.last_poll = 0
 
         sx = SIDEBAR_X
         self.btn_deploy   = Btn(sx, 0, SIDEBAR_W, 38, "DESPLEGAR UNIDAD",  C_BTN_G)
@@ -445,7 +595,9 @@ class FireBrigadeUI:
         self.btn_hard   = Btn(SCREEN_W//2-110, 400, 220, 46, "DIFICIL", C_BTN_R)
 
     # ── Loop ──────────────────────────────────────────────────────────────────
-    def run(self):
+    def run(self, demo=False, engine_mode=False):
+        self.demo = demo
+        self.engine_mode = engine_mode
         while True:
             self.clock.tick(60)
             self.tick += 1
@@ -458,7 +610,84 @@ class FireBrigadeUI:
             if   self.phase == "MENU":     self.update_menu(evs,mp);     self.draw_menu()
             elif self.phase == "PLAYING":  self.update_game(evs,mp);     self.draw_game()
             elif self.phase == "GAMEOVER": self.update_over(evs,mp);     self.draw_over()
+            # handle demo automation after updates
+            if self.demo:
+                self._run_demo_step()
             pygame.display.flip()
+
+    def _run_demo_step(self):
+        # simple state machine to demo: CHILD immediate, ADULT multi-turn, ANCIANO slow
+        if self.phase == "MENU":
+            # start immediately in EASY
+            self.start("EASY")
+            self.demo_state = 0
+            self.demo_timer = 20
+            return
+
+        if self.phase != "PLAYING": return
+
+        # decrement timer
+        if self.demo_timer > 0:
+            self.demo_timer -= 1
+            return
+
+        gs = self.gs
+
+        # state 0: evacuate a CHILD immediately
+        if self.demo_state == 0:
+            child = next((c for c in gs.civilians if c["type"]=="CHILD" and c["status"]=="ALIVE"), None)
+            if child:
+                msg = gs.backtrack_evacuate(child["id"])
+                self.set_msg("DEMO: " + msg)
+            self.demo_state = 1
+            self.demo_timer = 30
+            return
+
+        # state 1: evacuate an ADULT and advance a few turns to show movement
+        if self.demo_state == 1:
+            adult = next((c for c in gs.civilians if c["type"]=="ADULT" and c["status"]=="ALIVE"), None)
+            if adult:
+                msg = gs.backtrack_evacuate(adult["id"])
+                self.set_msg("DEMO: " + msg)
+            self.demo_state = 2
+            self.demo_timer = 30
+            self._demo_turns = 0
+            return
+
+        if self.demo_state == 2:
+            # advance up to 4 turns to show adult movement
+            if self._demo_turns < 4:
+                gs.next_turn(); self._demo_turns += 1
+                self.set_msg(f"DEMO: Turno {gs.turn}")
+                self.demo_timer = 20
+                return
+            else:
+                self.demo_state = 3
+                self.demo_timer = 20
+                return
+
+        # state 3: evacuate an ANCIANO and advance more turns to show slow movement
+        if self.demo_state == 3:
+            anc = next((c for c in gs.civilians if c["type"]=="ANCIANO" and c["status"]=="ALIVE"), None)
+            if anc:
+                msg = gs.backtrack_evacuate(anc["id"])
+                self.set_msg("DEMO: " + msg)
+            self.demo_state = 4
+            self.demo_timer = 30
+            self._demo_turns = 0
+            return
+
+        if self.demo_state == 4:
+            # advance up to 8 turns to show anciano slow move
+            if self._demo_turns < 8:
+                gs.next_turn(); self._demo_turns += 1
+                self.set_msg(f"DEMO: Turno {gs.turn}")
+                self.demo_timer = 20
+                return
+            else:
+                self.set_msg("DEMO: terminado")
+                self.demo = False
+                return
 
     # ── MENÚ ──────────────────────────────────────────────────────────────────
     def update_menu(self, evs, mp):
@@ -498,6 +727,19 @@ class FireBrigadeUI:
     # ── JUEGO ─────────────────────────────────────────────────────────────────
     def update_game(self, evs, mp):
         gs = self.gs
+        # If engine mode, poll state.json periodically and load updates
+        if self.engine_mode:
+            now = time.time()
+            if now - self.last_poll >= self.poll_interval:
+                self.last_poll = now
+                try:
+                    m = os.path.getmtime('state.json') if os.path.exists('state.json') else 0
+                    if m and m != self.state_mtime:
+                        if gs.load_from_state_file('state.json'):
+                            self.state_mtime = m
+                            self.set_msg('State.json cargado (engine)')
+                except Exception:
+                    pass
         # Partículas
         self.particles = [p for p in self.particles if not p.dead()]
         for p in self.particles: p.update()
@@ -531,24 +773,45 @@ class FireBrigadeUI:
                             self.set_msg(f"Civil {civ['id']} ({civ['type']}) seleccionado")
 
             if self.btn_deploy.clicked(ev):
-                msg = gs.greedy_deploy()
-                self.action_taken = True
-                self.set_msg(msg)
+                if self.engine_mode:
+                    # write input.json for engine to deploy (no params -> greedy)
+                    self.write_input_json('DEPLOY', {})
+                    self.set_msg('Enviado DEPLOY -> engine')
+                    self.action_taken = True
+                else:
+                    msg = gs.greedy_deploy()
+                    self.action_taken = True
+                    self.set_msg(msg)
 
             elif self.btn_evacuate.clicked(ev):
                 alive = gs.alive_civilians()
                 cid = self.sel_civ if self.sel_civ else (alive[0]["id"] if alive else None)
                 if cid:
-                    msg = gs.backtrack_evacuate(cid)
-                    self.action_taken = True
-                    self.set_msg(msg)
-                    self.sel_civ = None
+                    if self.engine_mode:
+                        route = gs.find_route(cid)
+                        params = {"civilian_id": cid}
+                        if route:
+                            params["route"] = route
+                        self.write_input_json('EVACUATE', params)
+                        self.action_taken = True
+                        self.set_msg('Enviado EVACUATE -> engine')
+                        self.sel_civ = None
+                    else:
+                        msg = gs.backtrack_evacuate(cid)
+                        self.action_taken = True
+                        self.set_msg(msg)
+                        self.sel_civ = None
 
             elif self.btn_end.clicked(ev):
-                gs.next_turn()
-                self.action_taken = False
-                self.set_msg(f"Turno {gs.turn} — fuego propagado")
-                if gs.game_over: self.phase="GAMEOVER"
+                if self.engine_mode:
+                    self.write_input_json('END_TURN', {})
+                    self.action_taken = False
+                    self.set_msg('Enviado END_TURN -> engine')
+                else:
+                    gs.next_turn()
+                    self.action_taken = False
+                    self.set_msg(f"Turno {gs.turn} — fuego propagado")
+                    if gs.game_over: self.phase="GAMEOVER"
 
         if self.msg_t > 0: self.msg_t -= 1
 
@@ -585,7 +848,7 @@ class FireBrigadeUI:
         # Mapa rápido: posición -> civil vivo
         civ_at = {}
         for civ in gs.civilians:
-            if civ["status"] == "ALIVE":
+            if civ["status"] in ("ALIVE", "MOVING"):
                 civ_at[(civ["row"], civ["col"])] = civ
 
         for r in range(8):
@@ -614,6 +877,12 @@ class FireBrigadeUI:
                 # Etiqueta de celda
                 if ct == "CIVILIAN":
                     civ = civ_at.get((r, c))
+                    # If civilian is moving, draw rescue overlay: white cell + red cross
+                    if civ and civ.get("status") == "MOVING":
+                        rr(self.screen, (255,255,255), rect, r=4)
+                        m = 10
+                        pygame.draw.line(self.screen, (200,20,20), (x+m, y+m), (x+CELL_SIZE-m, y+CELL_SIZE-m), 5)
+                        pygame.draw.line(self.screen, (200,20,20), (x+CELL_SIZE-m, y+m), (x+m, y+CELL_SIZE-m), 5)
                     label = CIV_LABELS.get(civ["type"], "P") if civ else "P"
                     # Fondo oscuro pequeño para legibilidad
                     sb = pygame.Surface((CELL_SIZE-10, 22), pygame.SRCALPHA)
@@ -730,6 +999,17 @@ class FireBrigadeUI:
 
     def set_msg(self, m): self.msg=m; self.msg_t=200
 
+    def write_input_json(self, action, parameters=None, path='input.json'):
+        j = {"action": action, "parameters": (parameters if parameters is not None else {})}
+        try:
+            with open(path,'w') as f:
+                json.dump(j, f, indent=4)
+            return True
+        except Exception:
+            return False
+
 # ─────────────────────────────────────────────────────────────────────────────
 if __name__ == "__main__":
-    FireBrigadeUI().run()
+    demo = "--demo" in sys.argv
+    engine_mode = "--engine" in sys.argv
+    FireBrigadeUI().run(demo=demo, engine_mode=engine_mode)

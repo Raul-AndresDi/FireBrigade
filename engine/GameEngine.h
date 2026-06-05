@@ -22,6 +22,10 @@ struct Civilian {
     int         row;
     int         col;
     std::string status; // "ALIVE", "EVACUATED", "DEAD"
+    std::vector<std::pair<int,int>> route; // optional evacuation route (row,col)
+    int route_index = 0;    // current index in route
+    int move_cooldown = 0;  // turns to wait before next step
+    int speed = 1;          // 1 for normal, 2 for ANCIANO
 };
 
 class GameEngine {
@@ -60,6 +64,7 @@ private:
     void  placeInitialUnits();
 
     void  propagateFire();
+    void  advanceEvacuations();
     void  spreadFromCell(int row, int col, CellType fireType);
     bool  inBounds(int row, int col) const;
 
@@ -69,7 +74,8 @@ private:
     void  deployUnit(const std::string& unitType);
     void  extinguishCell(int row, int col);
     void  protectNeighbors(int row, int col);
-    void  evacuateCivilian(int civilianId);
+    void  evacuateCivilian(int civilianId, const std::vector<std::pair<int,int>>& route = {});
+    void  deployUnit(const std::string& unitType, int targetRow, int targetCol);
 
     void  checkWinLoss();
     void  addScore(int points);

@@ -46,6 +46,62 @@ void GameEngine::initGame(const std::string& diff) {
               << " — Turno " << currentTurn << "\n";
 }
 
+// Avanza las evacuaciones en curso: mueve civiles paso a paso según su ruta y velocidad
+void GameEngine::advanceEvacuations() {
+    for (auto &civ : civilians) {
+        if (civ.status == "DEAD" || civ.status == "EVACUATED") continue;
+        if (civ.route.empty()) continue; // no ruta asignada
+
+        // treat MOVING as alive; ensure status reflects movement
+        if (civ.status != "MOVING") civ.status = "MOVING";
+
+        if (civ.move_cooldown > 0) {
+            civ.move_cooldown--; // wait this turn
+            continue;
+        }
+
+        // current position -> clear if still marked as CIVILIAN
+        if (inBounds(civ.row, civ.col) && grid[civ.row][civ.col] == CellType::CIVILIAN)
+            grid[civ.row][civ.col] = CellType::EMPTY;
+
+        // advance route index
+        if (civ.route_index < (int)civ.route.size()) civ.route_index++;
+
+        // If route_index exceeded, consider evacuated
+        if (civ.route_index >= (int)civ.route.size()) {
+            civ.status = "EVACUATED";
+            // award points according to type
+            int pts = 0;
+            if      (civ.type == "CHILD")   pts = 100;
+            else if (civ.type == "ADULT")   pts = 50;
+            else if (civ.type == "ANCIANO") pts = 75;
+            else if (civ.type == "FAMILY")  pts = 150;
+            addScore(pts);
+            std::cout << "[Engine] Civil " << civ.id << " completó evacuación. +" << pts << " pts\n";
+            continue;
+        }
+
+        // move to next cell
+        int nr = civ.route[civ.route_index].first;
+        int nc = civ.route[civ.route_index].second;
+
+        // if moving into fire -> dies
+        if (inBounds(nr, nc) && (grid[nr][nc] == CellType::FIRE_NORMAL || grid[nr][nc] == CellType::FIRE_CANOPY)) {
+            civ.status = "DEAD";
+            score -= 100;
+            std::cout << "[!] Civil " << civ.id << " quemado en movimiento en (" << nr << "," << nc << ") -100 pts\n";
+            continue;
+        }
+
+        // update position
+        civ.row = nr; civ.col = nc;
+        if (inBounds(civ.row, civ.col)) grid[civ.row][civ.col] = CellType::CIVILIAN;
+
+        // set cooldown according to speed (speed-1 turns to wait before next move)
+        civ.move_cooldown = std::max(0, civ.speed - 1);
+    }
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 void GameEngine::placeInitialFires() {
     grid[2][2] = CellType::FIRE_NORMAL; intensity[2][2] = 50.0f;
@@ -66,13 +122,16 @@ void GameEngine::placeInitialCivilians() {
         Civilian civ;
         civ.id = nextId++; civ.type = type;
         civ.row = r; civ.col = c; civ.status = "ALIVE";
+        // set movement speed based on type (ANCIANO slower)
+        civ.speed = (type == "ANCIANO") ? 2 : 1;
         civilians.push_back(civ);
         grid[r][c] = CellType::CIVILIAN;
     };
-    add("ADULT",  0, 7);
-    add("CHILD",  7, 0);
-    if (difficulty == "MEDIUM" || difficulty == "HARD") add("ANCIANO", 0, 0);
-    if (difficulty == "HARD")                           add("FAMILY",  7, 7);
+    // place civilians away from the border so evacuations take several turns
+    add("ADULT",  2, 5);
+    add("CHILD",  5, 2);
+    if (difficulty == "MEDIUM" || difficulty == "HARD") add("ANCIANO", 3, 3);
+    if (difficulty == "HARD")                           add("FAMILY",  4, 4);
 }
 
 void GameEngine::placeInitialUnits() {
@@ -87,6 +146,8 @@ void GameEngine::runTurn() {
     std::cout << "\n══════════ TURNO " << currentTurn << " ══════════\n";
 
     propagateFire();
+    // avanzar civiles en ruta antes de encolar nuevas unidades o procesar input
+    advanceEvacuations();
 
     if (currentTurn % crewInterval  == 0) unitQueue.enqueue("GRUPO",       currentTurn);
     if (currentTurn % truckInterval == 0) unitQueue.enqueue("CAMION",      currentTurn);
@@ -195,6 +256,31 @@ void GameEngine::deployUnit(const std::string& unitType) {
     rebuildBST();
 }
 
+// Overload: deploy to explicit target coordinates (if provided by Python)
+void GameEngine::deployUnit(const std::string& unitType, int targetRow, int targetCol) {
+    if (unitQueue.isEmpty()) { std::cout << "[Engine] Sin unidades disponibles." << "\n"; return; }
+
+    if (!inBounds(targetRow, targetCol)) {
+        std::cout << "[Engine] Target fuera de rango: (" << targetRow << "," << targetCol << ")" << "\n";
+        return;
+    }
+
+    bool isCanopy = (grid[targetRow][targetCol] == CellType::FIRE_CANOPY);
+    float risk = computeRisk(targetRow, targetCol);
+    int pts = (int)(isCanopy ? 15.0f * risk : 10.0f * risk);
+
+    std::cout << "[Greedy/Remote] " << unitType << " → (" << targetRow << "," << targetCol
+              << ") riesgo=" << risk << "\n";
+
+    addScore(pts);
+    extinguishCell(targetRow, targetCol);
+    if (unitType == "HELICOPTERO") protectNeighbors(targetRow, targetCol);
+
+    UnitNode* used = unitQueue.dequeue();
+    delete used;
+    rebuildBST();
+}
+
 void GameEngine::extinguishCell(int row, int col) {
     grid[row][col]      = CellType::EMPTY;
     intensity[row][col] = 0.0f;
@@ -214,18 +300,34 @@ void GameEngine::protectNeighbors(int row, int col) {
     }
 }
 
-void GameEngine::evacuateCivilian(int civilianId) {
+void GameEngine::evacuateCivilian(int civilianId, const std::vector<std::pair<int,int>>& route) {
     for (auto& civ : civilians) {
-        if (civ.id == civilianId && civ.status == "ALIVE") {
-            civ.status = "EVACUATED";
-            grid[civ.row][civ.col] = CellType::EMPTY;
-            int pts = 0;
-            if      (civ.type == "CHILD")   pts = 100;
-            else if (civ.type == "ADULT")   pts = 50;
-            else if (civ.type == "ANCIANO") pts = 75;
-            else if (civ.type == "FAMILY")  pts = 150;
-            addScore(pts);
-            std::cout << "[Engine] Civil " << civ.id << " evacuado. +" << pts << " pts\n";
+        if (civ.id == civilianId && civ.status != "DEAD" && civ.status != "EVACUATED") {
+            // assign route and initialize movement state
+            civ.route = route;
+            civ.route_index = 0;
+            civ.move_cooldown = std::max(0, civ.speed - 1);
+            // CHILD evacua inmediatamente aunque la ruta tenga varios pasos
+            if (civ.type == "CHILD") {
+                civ.status = "EVACUATED";
+                grid[civ.row][civ.col] = CellType::EMPTY;
+                int pts = 100;
+                addScore(pts);
+                std::cout << "[Engine] Child " << civ.id << " evacuado inmediatamente. +" << pts << " pts\n";
+            } else {
+                civ.status = civ.route.empty() ? "EVACUATED" : "MOVING";
+                // if empty route, immediately consider evacuated and award points
+                if (civ.status == "EVACUATED") {
+                    int pts = 0;
+                    if      (civ.type == "ADULT")   pts = 50;
+                    else if (civ.type == "ANCIANO") pts = 75;
+                    else if (civ.type == "FAMILY")  pts = 150;
+                    addScore(pts);
+                    std::cout << "[Engine] Civil " << civ.id << " evacuado. +" << pts << " pts\n";
+                } else {
+                    std::cout << "[Engine] Civil " << civ.id << " inicia evacuación (ruta de " << civ.route.size() << " pasos)\n";
+                }
+            }
             return;
         }
     }
@@ -316,6 +418,15 @@ void GameEngine::writeStateJSON() const {
         json cv;
         cv["id"] = c.id; cv["type"] = c.type;
         cv["position"] = {c.row, c.col}; cv["status"] = c.status;
+        // if a planned/used evacuation route exists, include it for consumers (UI/analytics)
+        if (!c.route.empty()) {
+            json r = json::array();
+            for (const auto &p : c.route) r.push_back({p.first, p.second});
+            cv["route"] = r;
+            cv["route_index"] = c.route_index;
+            cv["move_cooldown"] = c.move_cooldown;
+            cv["speed"] = c.speed;
+        }
         civs.push_back(cv);
     }
     j["civilians"] = civs;
@@ -352,11 +463,32 @@ void GameEngine::readInputJSON() {
 
     std::string action = j.value("action", "NONE");
     if (action == "DEPLOY") {
-        if (!unitQueue.isEmpty()) deployUnit(unitQueue.front()->unitType);
-        else std::cout << "[Engine] Sin unidades disponibles.\n";
+        if (unitQueue.isEmpty()) { std::cout << "[Engine] Sin unidades disponibles.\n"; }
+        else {
+            json params = j.value("parameters", json::object());
+            if (params.contains("target_row") && params.contains("target_col")) {
+                int tr = params["target_row"].get<int>();
+                int tc = params["target_col"].get<int>();
+                deployUnit(unitQueue.front()->unitType, tr, tc);
+            } else {
+                deployUnit(unitQueue.front()->unitType);
+            }
+        }
     } else if (action == "EVACUATE") {
         int civId = j["parameters"].value("civilian_id", -1);
-        if (civId != -1) evacuateCivilian(civId);
+        if (civId != -1) {
+            std::vector<std::pair<int,int>> route;
+            if (j["parameters"].contains("route") && j["parameters"]["route"].is_array()) {
+                for (const auto &p : j["parameters"]["route"]) {
+                    if (p.is_array() && p.size() == 2) {
+                        int rr = p[0].get<int>();
+                        int rc = p[1].get<int>();
+                        route.emplace_back(rr, rc);
+                    }
+                }
+            }
+            evacuateCivilian(civId, route);
+        }
     } else if (action == "END_TURN") {
         std::cout << "[Engine] Jugador termino el turno.\n";
     }
