@@ -575,6 +575,7 @@ class FireBrigadeUI:
         self.msg_t  = 0
         self.sel_civ = None  # id civil seleccionado
         self.action_taken = False  # 1 accion por turno
+        self.evacuation_taken = False  # 1 civil evacuado por turno
         # demo automation
         self.demo = False
         self.demo_state = 0
@@ -702,6 +703,7 @@ class FireBrigadeUI:
         self.particles = []
         self.sel_civ   = None
         self.action_taken = False
+        self.evacuation_taken = False
         self.phase = "PLAYING"
         self.set_msg(f"Juego iniciado — {diff}")
 
@@ -755,8 +757,9 @@ class FireBrigadeUI:
         has_units = len(gs.units) > 0
         has_fires = gs.fire_count() > 0
         has_civs  = len(gs.alive_civilians()) > 0
-        self.btn_deploy.disabled   = not (has_units and has_fires)
-        self.btn_evacuate.disabled = not has_civs or self.action_taken
+        turn_locked = self.engine_mode and self.action_taken
+        self.btn_deploy.disabled   = not (has_units and has_fires) or turn_locked
+        self.btn_evacuate.disabled = not has_civs or turn_locked or self.evacuation_taken
         for b in (self.btn_deploy,self.btn_evacuate,self.btn_end): b.update(mp)
 
         if gs.game_over: self.phase="GAMEOVER"; return
@@ -780,7 +783,6 @@ class FireBrigadeUI:
                     self.action_taken = True
                 else:
                     msg = gs.greedy_deploy()
-                    self.action_taken = True
                     self.set_msg(msg)
 
             elif self.btn_evacuate.clicked(ev):
@@ -794,11 +796,12 @@ class FireBrigadeUI:
                             params["route"] = route
                         self.write_input_json('EVACUATE', params)
                         self.action_taken = True
+                        self.evacuation_taken = True
                         self.set_msg('Enviado EVACUATE -> engine')
                         self.sel_civ = None
                     else:
                         msg = gs.backtrack_evacuate(cid)
-                        self.action_taken = True
+                        self.evacuation_taken = True
                         self.set_msg(msg)
                         self.sel_civ = None
 
@@ -806,10 +809,12 @@ class FireBrigadeUI:
                 if self.engine_mode:
                     self.write_input_json('END_TURN', {})
                     self.action_taken = False
+                    self.evacuation_taken = False
                     self.set_msg('Enviado END_TURN -> engine')
                 else:
                     gs.next_turn()
                     self.action_taken = False
+                    self.evacuation_taken = False
                     self.set_msg(f"Turno {gs.turn} — fuego propagado")
                     if gs.game_over: self.phase="GAMEOVER"
 
